@@ -1,0 +1,6 @@
+requests
+python-telegram-bot>=20.0
+youtube-transcript-api
+yt-dlp
+duckduckgo-search
+trafilatura
