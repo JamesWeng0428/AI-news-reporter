@@ -30,6 +30,36 @@ for handler in logging.getLogger().handlers:
     handler.addFilter(RedactTokenFilter())
 
 
+def extract_action(text):
+    """Find the first valid action JSON object in text.
+
+    Scans for balanced {...} spans (handles nested braces and arrays, which the
+    old `\\{[^{}]*\\}` regex could not), then returns the first one that parses
+    as JSON and carries an "action" key. Returns None if none found.
+    """
+    depth = 0
+    start = None
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start is not None:
+                    candidate = text[start : i + 1]
+                    try:
+                        obj = json.loads(candidate)
+                    except json.JSONDecodeError:
+                        start = None
+                        continue
+                    if isinstance(obj, dict) and "action" in obj:
+                        return obj, (start, i + 1)
+                    start = None
+    return None
+
+
 def apply_action(mem, action):
     """Apply a parsed action dict to memory. Returns confirmation message."""
     act = action.get("action")
@@ -170,20 +200,28 @@ Do not use * or _ inside regular words unless they are part of a complete pair."
         )
         return
 
-    # Parse any action block
-    json_match = re.search(r'\{[^{}]*"action"[^{}]*\}', response, re.DOTALL)
+    # Parse any action block (brace-balanced scan handles nested JSON/arrays)
+    extracted = extract_action(response)
     confirmation = None
-    if json_match:
+    clean_response = response
+    if extracted:
+        action, (span_start, span_end) = extracted
         try:
-            action = json.loads(json_match.group())
             confirmation = apply_action(mem, action)
             if confirmation:
                 save_memory(mem)
-        except json.JSONDecodeError:
-            pass
-
-    # Clean JSON block from response text
-    clean_response = re.sub(r'\{[^{}]*"action"[^{}]*\}', "", response, flags=re.DOTALL).strip()
+            else:
+                logging.warning(f"Unknown or no-op action from model: {action!r}")
+                confirmation = "I couldn't apply that change — unrecognized command."
+        except (KeyError, TypeError) as e:
+            logging.warning(f"Malformed action {action!r}: {e}")
+            confirmation = "I understood you wanted a config change but the command was malformed."
+        # Strip the matched JSON span from the user-facing text, plus any
+        # now-empty code fence the action JSON was wrapped in.
+        clean_response = (response[:span_start] + response[span_end:]).strip()
+        clean_response = re.sub(
+            r"```[a-zA-Z]*\s*```", "", clean_response
+        ).strip()
 
     reply_parts = []
     if clean_response:

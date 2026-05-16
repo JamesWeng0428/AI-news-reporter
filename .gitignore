@@ -5,7 +5,12 @@ __pycache__/
 .DS_Store
 .env
 *.log
+*.log.*
 .agent.lock
 .bot.lock
 memory.json
 memory.json.bak
+memory.json.tmp
+history.json
+history.json.bak
+history.json.tmp

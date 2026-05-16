@@ -14,20 +14,51 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 MEMORY_FILE = BASE_DIR / "memory.json"
+HISTORY_FILE = BASE_DIR / "history.json"
 ENV_FILE = BASE_DIR / ".env"
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
 MAX_TELEGRAM_MSG_LEN = 4096
 
 
+def repair_markdown_line(line: str) -> str:
+    """Repair mismatched bold/italic markers on a single line.
+
+    Small LLMs frequently emit a span that opens with one marker and closes
+    with the other — e.g. `*Title_`. The plain odd-count strip cannot fix that
+    (both markers are odd, so it would delete both and lose the styling). Here
+    we treat * and _ as one combined set of markers: pair them up positionally
+    and rewrite each pair to match the marker that opened it. A leftover
+    unpaired marker is dropped.
+    """
+    positions = [(i, ch) for i, ch in enumerate(line) if ch in "*_"]
+    if len(positions) < 2:
+        # 0 markers: nothing to do. 1 marker: dangling — drop it.
+        if len(positions) == 1:
+            i = positions[0][0]
+            return line[:i] + line[i + 1 :]
+        return line
+
+    chars = list(line)
+    drop = set()
+    # Pair markers two-by-two in document order; the closer becomes the opener.
+    for a, b in zip(positions[0::2], positions[1::2]):
+        opener_idx, opener_ch = a
+        closer_idx, _ = b
+        chars[closer_idx] = opener_ch
+    # Odd one out (unpaired trailing marker) — drop it.
+    if len(positions) % 2 == 1:
+        drop.add(positions[-1][0])
+    return "".join(c for i, c in enumerate(chars) if i not in drop)
+
+
 def sanitize_telegram_markdown(text: str) -> str:
-    """Remove dangling * or _ markers that would break Telegram Markdown parse."""
-    for marker in ("*", "_"):
-        while text.count(marker) % 2 != 0:
-            idx = text.rfind(marker)
-            if idx == -1:
-                break
-            text = text[:idx] + text[idx + 1 :]
-    return text
+    """Make Telegram Markdown safe: repair mismatched/dangling * and _ markers.
+
+    Operates line by line — Telegram bold/italic spans do not cross newlines,
+    so pairing per line both fixes more cases and avoids a marker on one line
+    being matched against one on another.
+    """
+    return "\n".join(repair_markdown_line(line) for line in text.split("\n"))
 
 
 def setup_logging(name: str, level=logging.INFO):
@@ -86,6 +117,22 @@ def load_env_file():
             os.environ.setdefault(key, value)
 
 
+def _atomic_write_json(path: Path, data):
+    """Write JSON atomically (.tmp then rename), keeping a .bak of the prior file."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    bak = path.with_suffix(path.suffix + ".bak")
+    try:
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+        if path.exists():
+            shutil.copy2(path, bak)
+        tmp.replace(path)
+    except Exception:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+        raise
+
+
 def load_memory():
     with open(MEMORY_FILE) as f:
         return json.load(f)
@@ -93,18 +140,28 @@ def load_memory():
 
 def save_memory(mem):
     """Atomic write with backup. Writes to .tmp then rename; keeps .bak."""
-    tmp = MEMORY_FILE.with_suffix(".json.tmp")
-    bak = MEMORY_FILE.with_suffix(".json.bak")
+    _atomic_write_json(MEMORY_FILE, mem)
+
+
+HISTORY_MAX = 150
+
+
+def load_history():
+    """Load the rolling list of already-sent news articles. Empty list if absent."""
+    if not HISTORY_FILE.exists():
+        return []
     try:
-        with open(tmp, "w") as f:
-            json.dump(mem, f, indent=2)
-        if MEMORY_FILE.exists():
-            shutil.copy2(MEMORY_FILE, bak)
-        tmp.replace(MEMORY_FILE)
-    except Exception:
-        if tmp.exists():
-            tmp.unlink(missing_ok=True)
-        raise
+        with open(HISTORY_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, OSError) as e:
+        logging.warning(f"Could not read history.json ({e}); starting fresh.")
+        return []
+
+
+def save_history(history):
+    """Persist news history, newest-first, capped at HISTORY_MAX entries."""
+    _atomic_write_json(HISTORY_FILE, history[:HISTORY_MAX])
 
 
 def acquire_single_instance_lock(lock_path: Path):

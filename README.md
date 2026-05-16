@@ -5,10 +5,14 @@ Personal AI agent that fetches news and YouTube video summaries, then delivers t
 ## Features
 
 - **Daily digests** at 10am/10pm with news from your chosen topics
+- **A digest with a voice** — written as a warm, lightly opinionated tech friend, not a dry wire service; each story gets a "worth your time?" verdict
+- **Relevance ranking** — fetches a wider candidate pool, then scores and keeps the most relevant stories
+- **Self-verification** — cross-checks each digest against its source articles and flags unsupported claims before sending
+- **No repeats** — `history.json` remembers sent stories so digests never recycle the same news
 - **YouTube channel monitoring** — checks for new videos and summarizes transcripts
 - **Natural-language config** — talk to the bot in Telegram to add topics, channels, or rules
-- **Local LLM** — uses Ollama (`llama3.2` by default); no API keys beyond Telegram
-- **Safe persistence** — atomic writes to `memory.json` with automatic `.bak`
+- **Local LLM** — uses Ollama (`qwen2.5:7b` by default); no API keys beyond Telegram
+- **Safe persistence** — atomic writes to `memory.json` / `history.json` with automatic `.bak`
 - **Access control** — optional username/user-ID allowlist
 
 ## Architecture
@@ -21,6 +25,7 @@ Personal AI agent that fetches news and YouTube video summaries, then delivers t
 | `setup.sh` | Interactive first-time setup (venv, token, chat ID, cron) |
 | `start_bot.sh` | Launches Ollama + bot listener |
 | `memory.json` | Runtime config: topics, channels, rules, model, per-channel `last_video_id` |
+| `history.json` | Rolling record of already-sent articles (cross-run dedup); auto-managed |
 
 ## Setup
 
@@ -49,7 +54,7 @@ TELEGRAM_CHAT_ID=...
 ## Requirements
 
 - Python 3 + `./venv`
-- Ollama running locally on port 11434
+- Ollama running locally on port 11434, with a model pulled (`ollama pull qwen2.5:7b`)
 - `requests`, `python-telegram-bot`, `youtube-transcript-api`, `yt-dlp`, `duckduckgo-search`, `trafilatura`
 
 ## Usage
@@ -58,10 +63,10 @@ Once the bot is running, message it on Telegram:
 
 - *"Add tech news to my topics"*
 - *"Follow this YouTube channel: https://youtube.com/@example"*
-- *"Switch to llama3.1"*
+- *"Show my current config"*
 - *"Only summarize videos longer than 10 minutes"*
 
-Digests arrive automatically at 10am/10pm. Message `/now` to trigger one on demand.
+Digests arrive automatically at 10am/10pm. Send `/digest` (or say *"refresh"*, *"latest news"*, etc.) to trigger one on demand.
 
 ## Debugging
 
